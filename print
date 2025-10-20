@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+# --- Vérification des arguments ---
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <prenom> <filament>"
+    exit 1
+fi
+
+# --- Récupère le dossier du script ---
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+cd "$SCRIPT_DIR"
+
+NAME="$1"
+FILAMENT=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+
+UPPER_NAME=$(echo "$NAME" | tr '[:lower:]' '[:upper:]')
+LOWER_NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
+
+STL_DIR="$SCRIPT_DIR/keychain_stl"
+GCODE_DIR="$SCRIPT_DIR/keychain_gcode"
+mkdir -p "$STL_DIR" "$GCODE_DIR"
+
+STL_FILE="$STL_DIR/keychain_${LOWER_NAME}.stl"
+GCODE_FILE="$GCODE_DIR/keychain_${LOWER_NAME}_${FILAMENT}.gcode"
+
+# --- Génération STL ---
+if [ ! -f "$STL_FILE" ]; then
+    echo "🧱 Génération STL..."
+    openscad -o "$STL_FILE" -D "name=\"$UPPER_NAME\"" keychain.scad >/dev/null 2>&1 || exit 1
+else
+    echo "⚠️  STL déjà existant : $(basename "$STL_FILE")"
+fi
+
+# --- Vérifie si le G-code existe déjà ---
+if [ -f "$GCODE_FILE" ]; then
+    echo "⚠️  G-code déjà existant : $(basename "$GCODE_FILE")"
+    read -p "Souhaitez-vous le régénérer ? (o/N) " -r
+    if [[ ! $REPLY =~ ^[Oo]$ ]]; then
+        echo "🚫 Slicing annulé. Fichier conservé."
+        exit 0
+    fi
+fi
+
+# --- Slicing avec PrusaSlicer ---
+echo "🌀 Slicing du STL en G-code..."
+
+prusa-slicer \
+  --load "$SCRIPT_DIR/slicer_profiles/printer/Artillery_Genius.ini" \
+  --load "$SCRIPT_DIR/slicer_profiles/filament/${FILAMENT}.ini" \
+  --load "$SCRIPT_DIR/slicer_profiles/process/0.2mm_quality.ini" \
+  --export-gcode \
+  --output "$GCODE_FILE" \
+  "$STL_FILE" >/dev/null 2>&1
+
+# --- Vérification du résultat ---
+if [ -f "$GCODE_FILE" ]; then
+    echo "✅ G-code généré : $(basename "$GCODE_FILE")"
+
+    PRINT_TIME=$(grep -iE '^; estimated printing time' "$GCODE_FILE" | sed 's/^; estimated printing time (normal mode) = //I')
+    if [ -n "$PRINT_TIME" ]; then
+        echo "🕒 Temps estimé : $PRINT_TIME"
+    else
+        echo "ℹ️  Temps d'impression non trouvé dans le G-code."
+    fi
+else
+    echo "❌ Échec : G-code non trouvé dans $GCODE_DIR"
+    exit 1
+fi
+
